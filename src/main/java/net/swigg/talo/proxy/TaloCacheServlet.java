@@ -49,8 +49,6 @@ import java.util.concurrent.*;
 public class TaloCacheServlet extends ProxyServlet.Transparent {
     static private final Logger LOGGER = LoggerFactory.getLogger(TaloCacheServlet.class);
 
-    private final ExecutorService executorService = Executors.newCachedThreadPool();
-
     private final ConcurrentMap<RequestIdentity, SettableFuture<ResponseHolder>> cache = new ConcurrentHashMap<>(8, 0.9f, 1);
 
     private Predicate<HttpServletRequest> serveFromCache;
@@ -107,7 +105,7 @@ public class TaloCacheServlet extends ProxyServlet.Transparent {
 
     private void writeCachedResponse(final SettableFuture<ResponseHolder> settableFuture, final HttpServletRequest request, final HttpServletResponse response) throws IOException {
         final AsyncContext asyncContext = request.startAsync();
-        executorService.submit(new Runnable() {
+        asyncContext.start(new Runnable() {
             @Override
             public void run() {
                 Response originalResponse = null;
