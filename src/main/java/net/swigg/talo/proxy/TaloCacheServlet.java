@@ -29,6 +29,7 @@ import com.google.common.base.Predicates;
 import com.google.common.util.concurrent.SettableFuture;
 import org.eclipse.jetty.client.api.Request;
 import org.eclipse.jetty.client.api.Response;
+import org.eclipse.jetty.client.api.Result;
 import org.eclipse.jetty.http.HttpField;
 import org.eclipse.jetty.proxy.ProxyServlet;
 import org.slf4j.Logger;
@@ -39,7 +40,9 @@ import javax.servlet.ServletException;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 import java.io.IOException;
-import java.util.concurrent.*;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.ExecutionException;
 
 /**
  * TALOCache Servlet that provides transparent caching of web responses.
@@ -52,6 +55,7 @@ public class TaloCacheServlet extends ProxyServlet.Transparent {
     private final ConcurrentMap<RequestIdentity, SettableFuture<ResponseHolder>> cache = new ConcurrentHashMap<>(8, 0.9f, 1);
 
     private Predicate<HttpServletRequest> serveFromCache;
+    private Predicate<Response> saveToCache;
 
     protected void service(final HttpServletRequest request, final HttpServletResponse response) throws ServletException, IOException {
         // check if we should even try and serve from the cache
@@ -103,6 +107,26 @@ public class TaloCacheServlet extends ProxyServlet.Transparent {
         return serveFromCachePredicate();
     }
 
+    /**
+     * Create a {@link Predicate} for if the {@link HttpServletResponse} is applicable to be cached to be used in
+     * the future.
+     */
+    private Predicate<Response> saveToCachePredicate() {
+        if (this.saveToCache != null) {
+            return saveToCache;
+        }
+
+        Predicate<Response> successPredicate = new Predicate<Response>() {
+            @Override
+            public boolean apply(Response response) {
+                return response.getStatus() >= 200 && response.getStatus() <= 399;
+            }
+        };
+
+        this.saveToCache = successPredicate;
+        return saveToCachePredicate();
+    }
+
     private void writeCachedResponse(final SettableFuture<ResponseHolder> settableFuture, final HttpServletRequest request, final HttpServletResponse response) throws IOException {
         final AsyncContext asyncContext = request.startAsync();
         asyncContext.start(new Runnable() {
@@ -131,9 +155,20 @@ public class TaloCacheServlet extends ProxyServlet.Transparent {
 
     @Override
     protected void customizeProxyRequest(final Request proxyRequest, final HttpServletRequest request) {
-        RequestIdentity requestIdentity = (RequestIdentity) request.getAttribute("requestIdentity");
+        final RequestIdentity requestIdentity = (RequestIdentity) request.getAttribute("requestIdentity");
         ProxyResponseListener proxyResponseListener = new ProxyResponseListener(requestIdentity, cache);
         proxyRequest.onResponseContent(proxyResponseListener);
         proxyRequest.onResponseSuccess(proxyResponseListener);
+
+        // remove from cache if invalid to be served from in the future
+        final Predicate<Response> saveToCache = this.saveToCachePredicate();
+        proxyRequest.onComplete(new Response.CompleteListener() {
+            @Override
+            public void onComplete(Result result) {
+                if (result.isFailed() || !saveToCache.apply(result.getResponse())) {
+                    cache.remove(requestIdentity);
+                }
+            }
+        });
     }
 }
