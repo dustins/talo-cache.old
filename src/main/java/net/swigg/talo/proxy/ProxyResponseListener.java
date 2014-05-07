@@ -25,16 +25,13 @@
 package net.swigg.talo.proxy;
 
 import com.google.common.base.Charsets;
-import com.google.common.util.concurrent.ListenableFuture;
 import com.google.common.util.concurrent.SettableFuture;
 import org.eclipse.jetty.client.api.Response;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.ByteBuffer;
-import java.nio.MappedByteBuffer;
-import java.nio.charset.Charset;
-import java.util.Map;
+import java.util.concurrent.ConcurrentMap;
 
 /**
  * Response listener for storing the response.
@@ -43,15 +40,13 @@ import java.util.Map;
  */
 public class ProxyResponseListener implements Response.SuccessListener, Response.ContentListener {
     private final RequestIdentity requestIdentity;
-    private final Map<RequestIdentity, ResponseHolder> cache;
-    private ByteArrayOutputStream outputStream;
-    private SettableFuture<ResponseHolder> settableFuture;
+    private final ConcurrentMap<RequestIdentity, SettableFuture<ResponseHolder>> cache;
+    private final ByteArrayOutputStream outputStream;
 
-    public ProxyResponseListener(RequestIdentity requestIdentity, Map<RequestIdentity, ResponseHolder> cache, SettableFuture<ResponseHolder> settableFuture) {
+    public ProxyResponseListener(final RequestIdentity requestIdentity, final ConcurrentMap<RequestIdentity, SettableFuture<ResponseHolder>> cache) {
         this.requestIdentity = requestIdentity;
         this.cache = cache;
         this.outputStream = new ByteArrayOutputStream();
-        this.settableFuture = settableFuture;
     }
 
     @Override
@@ -81,7 +76,6 @@ public class ProxyResponseListener implements Response.SuccessListener, Response
     @Override
     public void onSuccess(Response response) {
         ResponseHolder responseHolder = new ResponseHolder(response, new String(outputStream.toByteArray(), Charsets.UTF_8));
-        cache.put(requestIdentity, responseHolder);
-        settableFuture.set(responseHolder);
+        cache.get(requestIdentity).set(responseHolder);
     }
 }

@@ -24,8 +24,6 @@
 
 package net.swigg.talo.proxy;
 
-import com.google.common.collect.Maps;
-import com.google.common.util.concurrent.ListenableFuture;
 import com.google.common.util.concurrent.SettableFuture;
 import org.eclipse.jetty.client.api.Request;
 import org.eclipse.jetty.client.api.Response;
@@ -34,12 +32,12 @@ import org.eclipse.jetty.proxy.ProxyServlet;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.servlet.AsyncContext;
 import javax.servlet.ServletException;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 import java.io.IOException;
-import java.util.Map;
-import java.util.concurrent.ExecutionException;
+import java.util.concurrent.*;
 
 /**
  * TALOCache Servlet that provides transparent caching of web responses.
@@ -49,8 +47,9 @@ import java.util.concurrent.ExecutionException;
 public class TaloCacheServlet extends ProxyServlet.Transparent {
     static private final Logger LOGGER = LoggerFactory.getLogger(TaloCacheServlet.class);
 
-    private Map<RequestIdentity, ResponseHolder> cache = Maps.newConcurrentMap();
-    private Map<RequestIdentity, SettableFuture<ResponseHolder>> activeRequests = Maps.newConcurrentMap();
+    private final ExecutorService executorService = Executors.newCachedThreadPool();
+
+    private final ConcurrentMap<RequestIdentity, SettableFuture<ResponseHolder>> cache = new ConcurrentHashMap<>(8, 0.9f, 1);
 
     protected void service(final HttpServletRequest request, final HttpServletResponse response) throws ServletException, IOException {
         if (!request.getMethod().equals("GET") && !request.getMethod().equals("HEAD")) {
@@ -59,41 +58,49 @@ public class TaloCacheServlet extends ProxyServlet.Transparent {
         }
 
         RequestIdentity requestIdentity = new RequestIdentity(request);
-        if (cache.containsKey(requestIdentity)) {
-            this.writeCachedResponse(cache.get(requestIdentity), response);
+        SettableFuture<ResponseHolder> settableFuture = null;
+        SettableFuture<ResponseHolder> responseHolderSettableFuture = SettableFuture.create();
+        settableFuture = cache.putIfAbsent(requestIdentity, responseHolderSettableFuture);
+
+        if (settableFuture != null) {
+            this.writeCachedResponse(settableFuture, request, response);
             return;
-        } else if (activeRequests.containsKey(requestIdentity)) {
-            try {
-                this.writeCachedResponse(activeRequests.get(requestIdentity).get(), response);
-                return;
-            } catch (InterruptedException | ExecutionException e) {
-                e.printStackTrace();
-            }
         }
 
-        SettableFuture<ResponseHolder> settableFuture = SettableFuture.create();
-        activeRequests.put(requestIdentity, settableFuture);
-
+        request.setAttribute("requestIdentity", requestIdentity);
         super.service(request, response);
     }
 
-    private void writeCachedResponse(ResponseHolder responseHolder, HttpServletResponse response) throws IOException {
-        Response originalResponse = responseHolder.getResponse();
+    private void writeCachedResponse(final SettableFuture<ResponseHolder> settableFuture, final HttpServletRequest request, final HttpServletResponse response) throws IOException {
+        final AsyncContext asyncContext = request.startAsync();
+        executorService.submit(new Runnable() {
+            @Override
+            public void run() {
+                Response originalResponse = null;
+                try {
+                    originalResponse = settableFuture.get().getResponse();
+                    response.setStatus(originalResponse.getStatus());
 
-        response.setStatus(originalResponse.getStatus());
-        for (HttpField httpField : originalResponse.getHeaders()) {
-            response.setHeader(httpField.getName(), httpField.getValue());
-        }
-        response.getWriter().write(responseHolder.getBody());
-        response.getWriter().flush();
-        response.getWriter().close();
+                    for (HttpField httpField : originalResponse.getHeaders()) {
+                        response.setHeader(httpField.getName(), httpField.getValue());
+                    }
+
+                    response.getWriter().write(settableFuture.get().getBody());
+                    response.getWriter().flush();
+                    response.getWriter().close();
+                } catch (InterruptedException | ExecutionException | IOException e) {
+                    LOGGER.error("Error writing cached response.", e);
+                }
+
+                asyncContext.complete();
+            }
+        });
     }
 
     @Override
-    protected void customizeProxyRequest(Request proxyRequest, HttpServletRequest request) {
-        final RequestIdentity requestIdentity = new RequestIdentity(request);
-        final SettableFuture<ResponseHolder> settableFuture = this.activeRequests.get(requestIdentity);
-        ProxyResponseListener proxyResponseListener = new ProxyResponseListener(requestIdentity, cache, settableFuture);
+    protected void customizeProxyRequest(final Request proxyRequest, final HttpServletRequest request) {
+        RequestIdentity requestIdentity = (RequestIdentity) request.getAttribute("requestIdentity");
+        ProxyResponseListener proxyResponseListener = new ProxyResponseListener(requestIdentity, cache);
         proxyRequest.onResponseContent(proxyResponseListener);
         proxyRequest.onResponseSuccess(proxyResponseListener);
     }

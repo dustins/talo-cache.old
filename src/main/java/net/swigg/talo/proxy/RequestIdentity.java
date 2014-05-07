@@ -24,13 +24,13 @@
 
 package net.swigg.talo.proxy;
 
+import com.google.common.base.Objects;
 import com.google.common.collect.Ordering;
 
 import javax.servlet.http.HttpServletRequest;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
-import java.util.Objects;
 
 import static com.google.common.base.Preconditions.checkState;
 
@@ -42,11 +42,13 @@ import static com.google.common.base.Preconditions.checkState;
 public class RequestIdentity {
     private HttpServletRequest request;
 
+    private final String requestUri;
     private int headersHash     = 0;
     private int queryStringHash = 0;
 
     public RequestIdentity(HttpServletRequest request) {
         this.request = request;
+        this.requestUri = request.getRequestURI();
         this.headersHash = this.computeHeaderHash();
     }
 
@@ -67,7 +69,7 @@ public class RequestIdentity {
 
     @Override
     public int hashCode() {
-        return Objects.hash(headersHash, queryStringHash, request.getRequestURI());
+        return Objects.hashCode(requestUri, headersHash, queryStringHash);
     }
 
     @Override
@@ -79,8 +81,8 @@ public class RequestIdentity {
             return false;
         }
         final RequestIdentity other = (RequestIdentity) obj;
-        return Objects.equals(this.headersHash, other.headersHash) &&
-                Objects.equals(this.queryStringHash, other.queryStringHash) &&
-                Objects.equals(this.request.getRequestURI(), other.request.getRequestURI());
+        return Objects.equal(this.requestUri, other.requestUri) &&
+                Objects.equal(this.headersHash, other.headersHash) &&
+                Objects.equal(this.queryStringHash, other.queryStringHash);
     }
 }

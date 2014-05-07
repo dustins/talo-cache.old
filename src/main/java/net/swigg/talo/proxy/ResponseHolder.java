@@ -26,8 +26,6 @@ package net.swigg.talo.proxy;
 
 import org.eclipse.jetty.client.api.Response;
 
-import javax.servlet.http.HttpServletResponse;
-
 /**
  * Container for storing the responses from the target application.
  *
