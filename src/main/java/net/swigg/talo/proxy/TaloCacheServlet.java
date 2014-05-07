@@ -24,6 +24,8 @@
 
 package net.swigg.talo.proxy;
 
+import com.google.common.base.Predicate;
+import com.google.common.base.Predicates;
 import com.google.common.util.concurrent.SettableFuture;
 import org.eclipse.jetty.client.api.Request;
 import org.eclipse.jetty.client.api.Response;
@@ -51,8 +53,12 @@ public class TaloCacheServlet extends ProxyServlet.Transparent {
 
     private final ConcurrentMap<RequestIdentity, SettableFuture<ResponseHolder>> cache = new ConcurrentHashMap<>(8, 0.9f, 1);
 
+    private Predicate<HttpServletRequest> serveFromCache;
+
     protected void service(final HttpServletRequest request, final HttpServletResponse response) throws ServletException, IOException {
-        if (!request.getMethod().equals("GET") && !request.getMethod().equals("HEAD")) {
+        // check if we should even try and serve from the cache
+        Predicate<HttpServletRequest> serveFromCache = this.serveFromCachePredicate();
+        if (!serveFromCache.apply(request)) {
             super.service(request, response);
             return;
         }
@@ -60,15 +66,43 @@ public class TaloCacheServlet extends ProxyServlet.Transparent {
         RequestIdentity requestIdentity = new RequestIdentity(request);
         SettableFuture<ResponseHolder> settableFuture = null;
         SettableFuture<ResponseHolder> responseHolderSettableFuture = SettableFuture.create();
-        settableFuture = cache.putIfAbsent(requestIdentity, responseHolderSettableFuture);
 
+        // add a cache entry for this request if one doesn't already exists
+        settableFuture = cache.putIfAbsent(requestIdentity, responseHolderSettableFuture);
         if (settableFuture != null) {
             this.writeCachedResponse(settableFuture, request, response);
             return;
         }
 
+        // service the request
         request.setAttribute("requestIdentity", requestIdentity);
         super.service(request, response);
+    }
+
+    /**
+     * Create a {@link Predicate} for if the {@link HttpServletRequest} is applicable to be served from the cache.
+     */
+    private Predicate<HttpServletRequest> serveFromCachePredicate() {
+        if (this.serveFromCache != null) {
+            return serveFromCache;
+        }
+
+        Predicate<HttpServletRequest> getPredicate = new Predicate<HttpServletRequest>() {
+            @Override
+            public boolean apply(HttpServletRequest request) {
+                return request.getMethod().equals("GET");
+            }
+        };
+
+        Predicate<HttpServletRequest> headPredicate = new Predicate<HttpServletRequest>() {
+            @Override
+            public boolean apply(HttpServletRequest request) {
+                return request.getMethod().equals("HEAD");
+            }
+        };
+
+        this.serveFromCache = Predicates.or(getPredicate, headPredicate);
+        return serveFromCachePredicate();
     }
 
     private void writeCachedResponse(final SettableFuture<ResponseHolder> settableFuture, final HttpServletRequest request, final HttpServletResponse response) throws IOException {
