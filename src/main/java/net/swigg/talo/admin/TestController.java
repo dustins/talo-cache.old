@@ -41,5 +41,6 @@ public interface TestController {
     public String test();
 
     @RequestMapping(value = "/error")
+    @ResponseBody
     public String error(HttpServletResponse response) throws IOException;
 }
